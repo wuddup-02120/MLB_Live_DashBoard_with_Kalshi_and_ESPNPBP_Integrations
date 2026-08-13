@@ -1,7 +1,7 @@
 import requests
 import json
 from datetime import datetime, timedelta, timezone
-from config import KALSHI_API_KEY, KALSHI_PRIVATE_KEY_PATH
+from config import KALSHI_API_KEY, KALSHI_PRIVATE_KEY_PATH, POSTGRES_HOST, POSTGRES_DB, POSTGRES_PASSWORD, POSTGRES_PORT, POSTGRES_USER
 
 import asyncio
 import base64
@@ -10,6 +10,8 @@ import websockets
 
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import padding
+
+import psycopg
 
 def get_kalshi_mlb_event_core_info():
 
@@ -135,10 +137,14 @@ def create_websocket_headers(private_key):
 
     return headers
 
-async def connect_to_kalshi(private_key, market_tickers):
+async def connect_to_kalshi(private_key, market_tickers, connection, batch_size=50):
     websocket_url = "wss://external-api-ws.kalshi.com/trade-api/ws/v2"
 
     headers = create_websocket_headers(private_key)
+
+    ticker_buffer = []
+    last_flush_time = time.time()
+    flush_interval = 10
 
     async with websockets.connect(
         websocket_url,
@@ -161,9 +167,114 @@ async def connect_to_kalshi(private_key, market_tickers):
 
         print(f'Subscribed to {market_tickers}')
 
-        while True:
-            message = await websocket.recv()
-            print(message)
+        counter = 1
+
+        try:
+
+            while True:
+                message = await websocket.recv()
+
+                message_data = json.loads(message)
+
+                ticker_record = parse_ticker_message(message_data)
+
+                if ticker_record is not None:
+                    ticker_buffer.append(ticker_record)
+
+                buffer_full = len(ticker_buffer) >= batch_size
+                time_to_flush = time.time() - last_flush_time >= flush_interval
+
+                if ticker_buffer and (buffer_full or time_to_flush):
+                    insert_ticker_records(
+                        connection,
+                        ticker_buffer
+                    )
+
+                    print(f'Inserted {len(ticker_buffer)} ticker records')
+                    
+                    ticker_buffer.clear()
+                    last_flush_time = time.time()
+        finally:
+            if ticker_buffer:
+                insert_ticker_records(
+                    connection,
+                    ticker_buffer
+                )
+
+def parse_ticker_message(message_data):
+
+    if message_data.get("type") != "ticker":
+        return None
+
+    ticker_data = message_data['msg']
+
+    ticker_record = {
+        "market_id": ticker_data["market_id"],
+        "market_ticker": ticker_data["market_ticker"],
+        "price_dollars": ticker_data["price_dollars"],
+        "yes_bid_dollars": ticker_data["yes_bid_dollars"],
+        "yes_ask_dollars": ticker_data["yes_ask_dollars"],
+        "volume_fp": ticker_data["volume_fp"],
+        "open_interest_fp": ticker_data["open_interest_fp"],
+        "yes_bid_size_fp": ticker_data["yes_bid_size_fp"],
+        "yes_ask_size_fp": ticker_data["yes_ask_size_fp"],
+        "last_trade_size_fp": ticker_data["last_trade_size_fp"],
+        "ts_ms": ticker_data["ts_ms"],
+        "time": ticker_data["time"]
+    }
+
+    return ticker_record
+
+def connect_to_postgres():
+    
+    connection = psycopg.connect(
+        host = POSTGRES_HOST,
+        port = POSTGRES_PORT,
+        dbname = POSTGRES_DB,
+        user = POSTGRES_USER,
+        password = POSTGRES_PASSWORD
+    )
+
+    return connection
+
+def insert_ticker_records(connection, ticker_record):
+
+    with connection.cursor() as cursor:
+        cursor.executemany(
+            """
+            INSERT INTO kalshi_ticker_raw (
+                market_id,
+                market_ticker,
+                price_dollars,
+                yes_bid_dollars,
+                yes_ask_dollars,
+                volume_fp,
+                open_interest_fp,
+                yes_bid_size_fp,
+                yes_ask_size_fp,
+                last_trade_size_fp,
+                ts_ms,
+                event_time
+            )
+            VALUES (
+                %(market_id)s,
+                %(market_ticker)s,
+                %(price_dollars)s,
+                %(yes_bid_dollars)s,
+                %(yes_ask_dollars)s,
+                %(volume_fp)s,
+                %(open_interest_fp)s,
+                %(yes_bid_size_fp)s,
+                %(yes_ask_size_fp)s,
+                %(last_trade_size_fp)s,
+                %(ts_ms)s,
+                %(time)s
+            );
+            """,
+            ticker_record
+        )
+
+    connection.commit()
 
 def main():
     # Define static time-related variables
@@ -196,7 +307,18 @@ def main():
 
     private_key = load_private_key(KALSHI_PRIVATE_KEY_PATH)
 
-    asyncio.run(connect_to_kalshi(private_key, market_tickers))
+    connection = connect_to_postgres()
+
+    try:
+        asyncio.run(
+            connect_to_kalshi(
+                private_key,
+                market_tickers,
+                connection
+            )
+        )
+    finally:
+        connection.close()
 
 if __name__ == "__main__":
     main()
