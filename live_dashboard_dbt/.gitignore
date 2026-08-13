@@ -1,7 +1,7 @@
-.env
-__pycache__/
-*.pyc
-*.pem
+
+target/
+dbt_packages/
 logs/
+.env
 live_dashboard_dbt/logs/
 live_dashboard_dbt/target/

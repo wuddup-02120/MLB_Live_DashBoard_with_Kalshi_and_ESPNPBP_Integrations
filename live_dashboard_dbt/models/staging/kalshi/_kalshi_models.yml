@@ -1,0 +1,17 @@
+version: 2
+
+models:
+  - name: stg_kalshi_tickers
+    columns:
+      - name: ticker_record_id
+        data_tests:
+          - not_null
+          - unique
+
+      - name: market_ticker
+        data_tests:
+          - not_null
+
+      - name: kalshi_event_time
+        data_tests:
+          - not_null
