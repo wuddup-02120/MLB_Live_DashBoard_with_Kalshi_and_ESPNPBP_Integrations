@@ -86,7 +86,8 @@ def get_kalshi_mlb_event_data(window_start, window_end, ticker, event_sub, event
             "matchup_team_1": team_1,
             "matchup_team_2": team_2,
             "market_ticker_team_1": team_1_market_ticker,
-            "market_ticker_team_2": team_2_market_ticker
+            "market_ticker_team_2": team_2_market_ticker,
+            "game_start_time": game_start_time
         }
 
         return event_entry
@@ -276,7 +277,8 @@ def insert_ticker_records(connection, ticker_record):
 
     connection.commit()
 
-def main():
+def get_relevant_kalshi_mlb_events():
+
     # Define static time-related variables
     now = datetime.now(timezone.utc)
     window_start = now - timedelta(hours=3)
@@ -294,6 +296,12 @@ def main():
         event_entry = get_kalshi_mlb_event_data(window_start, window_end, event_ticker, event_sub, event_title)
         if event_entry is not None:
             kalshi_mlb_events[event_ticker] = event_entry
+
+    return kalshi_mlb_events
+
+def main():
+
+    kalshi_mlb_events = get_relevant_kalshi_mlb_events()
 
     # Create empty market tickers array to be passed to the websocket connection
     # so kalshi knows which market ticker we want to subscribe to
